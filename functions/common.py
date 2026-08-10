@@ -5,8 +5,11 @@ and subscriber API-key lookup for the client-driven webhook API.
 """
 
 import hashlib
+import ipaddress
+import json
 import os
 import secrets
+from urllib.parse import urlparse
 
 from firebase_admin import firestore
 from firebase_functions import https_fn
@@ -76,3 +79,54 @@ def require_api_key(req: https_fn.Request) -> dict:
         subscriber["id"] = doc.id
         return subscriber
     return None
+
+
+_BLOCKED_HOSTNAMES = {"localhost", "0.0.0.0", "metadata.google.internal"}
+
+
+def validate_webhook_url(url: str) -> str | None:
+    """Basic hygiene for subscriber-submitted webhook URLs: https-only,
+    reject obvious loopback/private/link-local/metadata-endpoint targets.
+    This is a static check against the URL literal only (no DNS
+    resolution) — deliberately not trying to defend against DNS
+    rebinding or similar, which would need a much heavier design than
+    this personal-scale app's threat model calls for. Returns an error
+    message, or None if the URL is acceptable."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return "URL could not be parsed."
+    if parsed.scheme != "https":
+        return "Webhook URL must use https."
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        return "Webhook URL must have a hostname."
+    if hostname in _BLOCKED_HOSTNAMES or hostname.endswith(".local"):
+        return "Webhook URL host is not allowed."
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        return None  # not an IP literal, plain hostname is fine
+    if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+        return "Webhook URL host is not allowed."
+    return None
+
+
+def json_response(data: dict, status: int = 200) -> https_fn.Response:
+    return https_fn.Response(
+        json.dumps(data),
+        status=status,
+        headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+    )
+
+
+def cors_preflight() -> https_fn.Response:
+    return https_fn.Response(
+        "",
+        status=204,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type",
+        },
+    )
