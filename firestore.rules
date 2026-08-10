@@ -1,0 +1,36 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Everything here is server-side only. The Android app, the CLI, and
+    // the React admin UI all go through Cloud Functions (Admin SDK, which
+    // bypasses these rules) rather than reading/writing Firestore directly
+    // — see docs/RULE_SCHEMA.md and the plan for why: device rules need
+    // owner-auth checks, subscriber docs hold an apiKeyHash that must never
+    // reach any client, and webhook grant-scope enforcement has to happen
+    // in one trusted place (ingestNotification), not in security rules.
+
+    // Registered devices: rules (Condition/Rule trees), seen apps/channels,
+    // last-seen. Written only via updateDeviceRules / reportInstalledApps
+    // callables (owner-gated).
+    match /devices/{deviceId}       { allow read, write: if false; }
+
+    // Subscriber accounts: apiKeyHash, grants, TTL. Written only via
+    // createSubscriber / grantSubscriberAccess / revokeSubscriberAccess /
+    // disableSubscriber callables (owner-gated) and purgeExpiredSubscribers
+    // (scheduled function).
+    match /subscribers/{subscriberId} { allow read, write: if false; }
+
+    // Webhooks: owned and edited by their subscriber via the public
+    // API-key-gated HTTPS functions in webhooks_api.py (which use the
+    // Admin SDK, not client Firestore access — subscribers never get a
+    // Firebase Auth identity or direct Firestore access at all).
+    match /webhooks/{webhookId}     { allow read, write: if false; }
+
+    // Delivery log + e2e test-receiver log: written only by
+    // ingestNotification / test_receiver, pruned by scheduled functions.
+    match /delivery_log/{id}        { allow read, write: if false; }
+    match /test_deliveries/{id}     { allow read, write: if false; }
+  }
+}

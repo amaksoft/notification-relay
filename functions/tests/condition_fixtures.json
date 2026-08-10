@@ -1,0 +1,211 @@
+[
+  {
+    "name": "always_matches",
+    "condition": { "type": "ALWAYS" },
+    "notification": { "package": "com.anything" },
+    "expected": true
+  },
+  {
+    "name": "always_with_inverse_never_matches",
+    "condition": { "type": "ALWAYS", "inverse": true },
+    "notification": { "package": "com.anything" },
+    "expected": false
+  },
+  {
+    "name": "package_exact_match",
+    "condition": { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.slack" },
+    "notification": { "package": "com.slack" },
+    "expected": true
+  },
+  {
+    "name": "package_no_match_different_package",
+    "condition": { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.slack" },
+    "notification": { "package": "com.whatsapp" },
+    "expected": false
+  },
+  {
+    "name": "package_is_case_sensitive_exact_match_only",
+    "condition": { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.Slack" },
+    "notification": { "package": "com.slack" },
+    "expected": false
+  },
+  {
+    "name": "title_contains_case_insensitive",
+    "condition": { "type": "NOTIFICATION_TITLE", "stringValue": "mentioned you" },
+    "notification": { "title": "Alice MENTIONED YOU in #general" },
+    "expected": true
+  },
+  {
+    "name": "title_does_not_contain",
+    "condition": { "type": "NOTIFICATION_TITLE", "stringValue": "mentioned you" },
+    "notification": { "title": "New message from Alice" },
+    "expected": false
+  },
+  {
+    "name": "text_contains_case_insensitive",
+    "condition": { "type": "NOTIFICATION_TEXT", "stringValue": "review this pr" },
+    "notification": { "text": "Can you REVIEW THIS PR?" },
+    "expected": true
+  },
+  {
+    "name": "channel_id_exact_match",
+    "condition": { "type": "NOTIFICATION_CHANNEL_ID", "stringValue": "slack_dm_channel" },
+    "notification": { "channelId": "slack_dm_channel" },
+    "expected": true
+  },
+  {
+    "name": "channel_id_no_match",
+    "condition": { "type": "NOTIFICATION_CHANNEL_ID", "stringValue": "slack_dm_channel" },
+    "notification": { "channelId": "slack_alerts_channel" },
+    "expected": false
+  },
+  {
+    "name": "flag_set_bitmask_match",
+    "condition": { "type": "NOTIFICATION_FLAG_SET", "intValue": 2 },
+    "notification": { "flags": 6 },
+    "expected": true
+  },
+  {
+    "name": "flag_set_bitmask_no_overlap",
+    "condition": { "type": "NOTIFICATION_FLAG_SET", "intValue": 8 },
+    "notification": { "flags": 6 },
+    "expected": false
+  },
+  {
+    "name": "and_all_children_match",
+    "condition": {
+      "type": "AND",
+      "conditions": [
+        { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.slack" },
+        { "type": "NOTIFICATION_TITLE", "stringValue": "mentioned you" }
+      ]
+    },
+    "notification": { "package": "com.slack", "title": "You were mentioned you" },
+    "expected": true
+  },
+  {
+    "name": "and_one_child_fails",
+    "condition": {
+      "type": "AND",
+      "conditions": [
+        { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.slack" },
+        { "type": "NOTIFICATION_TITLE", "stringValue": "mentioned you" }
+      ]
+    },
+    "notification": { "package": "com.slack", "title": "New message" },
+    "expected": false
+  },
+  {
+    "name": "and_empty_children_is_false",
+    "condition": { "type": "AND", "conditions": [] },
+    "notification": { "package": "com.anything" },
+    "expected": false
+  },
+  {
+    "name": "or_any_child_matches",
+    "condition": {
+      "type": "OR",
+      "conditions": [
+        { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.slack" },
+        { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.whatsapp" }
+      ]
+    },
+    "notification": { "package": "com.whatsapp" },
+    "expected": true
+  },
+  {
+    "name": "or_no_child_matches",
+    "condition": {
+      "type": "OR",
+      "conditions": [
+        { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.slack" },
+        { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.whatsapp" }
+      ]
+    },
+    "notification": { "package": "com.gmail" },
+    "expected": false
+  },
+  {
+    "name": "or_empty_children_is_false",
+    "condition": { "type": "OR", "conditions": [] },
+    "notification": { "package": "com.anything" },
+    "expected": false
+  },
+  {
+    "name": "inverse_on_leaf_negates",
+    "condition": { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.slack", "inverse": true },
+    "notification": { "package": "com.slack" },
+    "expected": false
+  },
+  {
+    "name": "inverse_on_and_negates_whole_group",
+    "condition": {
+      "type": "AND",
+      "inverse": true,
+      "conditions": [
+        { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.slack" },
+        { "type": "NOTIFICATION_TITLE", "stringValue": "mentioned you" }
+      ]
+    },
+    "notification": { "package": "com.slack", "title": "You were mentioned you" },
+    "expected": false
+  },
+  {
+    "name": "nested_and_or_combo_from_docs_example",
+    "condition": {
+      "type": "AND",
+      "conditions": [
+        { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.slack" },
+        { "type": "NOTIFICATION_CHANNEL_ID", "stringValue": "slack_dm_channel" },
+        { "type": "NOTIFICATION_TEXT", "stringValue": "mentioned you" }
+      ]
+    },
+    "notification": {
+      "package": "com.slack",
+      "channelId": "slack_dm_channel",
+      "text": "Hey, you were mentioned you in a thread"
+    },
+    "expected": true
+  },
+  {
+    "name": "nested_and_or_combo_wrong_channel_fails",
+    "condition": {
+      "type": "AND",
+      "conditions": [
+        { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.slack" },
+        { "type": "NOTIFICATION_CHANNEL_ID", "stringValue": "slack_dm_channel" },
+        { "type": "NOTIFICATION_TEXT", "stringValue": "mentioned you" }
+      ]
+    },
+    "notification": {
+      "package": "com.slack",
+      "channelId": "slack_alerts_channel",
+      "text": "You were mentioned you"
+    },
+    "expected": false
+  },
+  {
+    "name": "deeply_nested_or_of_ands",
+    "condition": {
+      "type": "OR",
+      "conditions": [
+        {
+          "type": "AND",
+          "conditions": [
+            { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.slack" },
+            { "type": "NOTIFICATION_CHANNEL_ID", "stringValue": "slack_dm_channel" }
+          ]
+        },
+        {
+          "type": "AND",
+          "conditions": [
+            { "type": "NOTIFICATION_PACKAGE_NAME", "stringValue": "com.whatsapp" },
+            { "type": "NOTIFICATION_CHANNEL_ID", "stringValue": "calls_channel" }
+          ]
+        }
+      ]
+    },
+    "notification": { "package": "com.whatsapp", "channelId": "calls_channel" },
+    "expected": true
+  }
+]

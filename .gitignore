@@ -1,0 +1,38 @@
+# Firebase
+.firebase/
+*-debug.log
+*.local.js
+
+# Env / secrets — CLI service-account key (see docs/OPERATIONS.md for
+# regeneration steps; a gitignored file the CLI needs is a documented
+# setup step, never a silent trap)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+service-account*.json
+.secret.local
+
+# Node / web build
+node_modules/
+npm-debug.log*
+web/dist/
+
+# Python (Cloud Functions + CLI)
+functions/venv/
+**/__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Android
+android/**/build/
+android/.gradle/
+android/local.properties
+android/**/*.apk
+android/**/*.aab
+
+# OS / editor
+.DS_Store
+.vscode/
