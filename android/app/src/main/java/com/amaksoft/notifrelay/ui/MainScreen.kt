@@ -15,11 +15,13 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -33,9 +35,11 @@ fun MainScreen(
     signedInEmail: String?,
     listenerEnabled: Boolean,
     batteryOptimizationIgnored: Boolean,
+    isSigningIn: Boolean,
     onSignIn: () -> Unit,
-    onGrantListener: () -> Unit,
-    onExemptBatteryOptimization: () -> Unit,
+    onSignOut: () -> Unit,
+    onManageListener: () -> Unit,
+    onManageBatteryOptimization: () -> Unit,
     onOpenRules: () -> Unit,
 ) {
     Scaffold(topBar = { CenterAlignedTopAppBar(title = { Text("Notification Relay") }) }) { padding ->
@@ -48,17 +52,24 @@ fun MainScreen(
         ) {
             StatusCard(
                 title = "Google account",
-                statusText = signedInEmail?.let { "Signed in as $it" } ?: "Not signed in",
+                statusText = when {
+                    isSigningIn -> "Signing in…"
+                    signedInEmail != null -> "Signed in as $signedInEmail"
+                    else -> "Not signed in"
+                },
                 isOk = signedInEmail != null,
                 actionLabel = if (signedInEmail == null) "Sign in with Google" else null,
                 onAction = onSignIn,
+                isLoading = isSigningIn,
+                secondaryActionLabel = if (signedInEmail != null) "Sign out" else null,
+                onSecondaryAction = onSignOut,
             )
             StatusCard(
                 title = "Notification access",
                 statusText = if (listenerEnabled) "Granted" else "Not granted",
                 isOk = listenerEnabled,
-                actionLabel = if (!listenerEnabled) "Grant access" else null,
-                onAction = onGrantListener,
+                actionLabel = if (listenerEnabled) "Revoke access" else "Grant access",
+                onAction = onManageListener,
             )
             StatusCard(
                 title = "Battery optimization",
@@ -68,8 +79,8 @@ fun MainScreen(
                     "Not exempt — the OS may delay or drop notifications while backgrounded"
                 },
                 isOk = batteryOptimizationIgnored,
-                actionLabel = if (!batteryOptimizationIgnored) "Exempt this app" else null,
-                onAction = onExemptBatteryOptimization,
+                actionLabel = if (batteryOptimizationIgnored) "Remove exemption" else "Exempt this app",
+                onAction = onManageBatteryOptimization,
             )
             Spacer(Modifier.weight(1f))
             FilledTonalButton(onClick = onOpenRules, modifier = Modifier.fillMaxWidth()) {
@@ -88,15 +99,22 @@ private fun StatusCard(
     isOk: Boolean,
     actionLabel: String?,
     onAction: () -> Unit,
+    isLoading: Boolean = false,
+    secondaryActionLabel: String? = null,
+    onSecondaryAction: () -> Unit = {},
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    if (isOk) Icons.Default.CheckCircle else Icons.Default.Warning,
-                    contentDescription = null,
-                    tint = if (isOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                )
+                if (isLoading) {
+                    CircularProgressIndicator(modifier = Modifier.width(24.dp).height(24.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(
+                        if (isOk) Icons.Default.CheckCircle else Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = if (isOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    )
+                }
                 Spacer(Modifier.width(8.dp))
                 Text(title, style = MaterialTheme.typography.titleMedium)
             }
@@ -106,9 +124,16 @@ private fun StatusCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp, start = 32.dp),
             )
-            if (actionLabel != null) {
+            if ((actionLabel != null || secondaryActionLabel != null) && !isLoading) {
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onAction) { Text(actionLabel) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (actionLabel != null) {
+                        Button(onClick = onAction) { Text(actionLabel) }
+                    }
+                    if (secondaryActionLabel != null) {
+                        OutlinedButton(onClick = onSecondaryAction) { Text(secondaryActionLabel) }
+                    }
+                }
             }
         }
     }

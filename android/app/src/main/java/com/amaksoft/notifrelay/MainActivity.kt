@@ -38,16 +38,19 @@ class MainActivity : ComponentActivity() {
     private var signedInEmail by mutableStateOf<String?>(null)
     private var listenerEnabled by mutableStateOf(false)
     private var batteryOptimizationIgnored by mutableStateOf(false)
+    private var isSigningIn by mutableStateOf(false)
 
     private val signInLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         try {
             val account = GoogleSignIn.getSignedInAccountFromIntent(result.data).result
             val credential = GoogleAuthProvider.getCredential(account.idToken, null)
             auth.signInWithCredential(credential).addOnCompleteListener {
+                isSigningIn = false
                 refreshState()
                 if (it.isSuccessful) reportDeviceStatus()
             }
         } catch (e: Exception) {
+            isSigningIn = false
             Log.w(TAG, "Google sign-in failed or was cancelled", e)
         }
     }
@@ -67,15 +70,29 @@ class MainActivity : ComponentActivity() {
                     signedInEmail = signedInEmail,
                     listenerEnabled = listenerEnabled,
                     batteryOptimizationIgnored = batteryOptimizationIgnored,
-                    onSignIn = { signInLauncher.launch(googleSignInClient.signInIntent) },
-                    onGrantListener = { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
-                    onExemptBatteryOptimization = {
-                        startActivity(
-                            Intent(
-                                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                Uri.parse("package:$packageName"),
+                    isSigningIn = isSigningIn,
+                    onSignIn = {
+                        isSigningIn = true
+                        signInLauncher.launch(googleSignInClient.signInIntent)
+                    },
+                    onSignOut = {
+                        auth.signOut()
+                        googleSignInClient.signOut().addOnCompleteListener { refreshState() }
+                    },
+                    onManageListener = { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
+                    onManageBatteryOptimization = {
+                        if (batteryOptimizationIgnored) {
+                            // There's no API for an app to drop its own exemption; send the
+                            // user to the full app list where they can flip it back off.
+                            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        } else {
+                            startActivity(
+                                Intent(
+                                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                    Uri.parse("package:$packageName"),
+                                )
                             )
-                        )
+                        }
                     },
                     onOpenRules = { startActivity(Intent(this, RulesActivity::class.java)) },
                 )
