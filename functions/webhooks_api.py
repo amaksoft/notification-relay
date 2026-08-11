@@ -11,6 +11,9 @@ external subscribers authenticate with a bearer API key, not Firebase
 Auth — there's no Callable SDK identity to hang this off of.
 """
 
+import logging
+from datetime import datetime, timezone
+
 from firebase_admin import firestore
 from firebase_functions import https_fn
 from google.cloud.firestore_v1 import FieldFilter
@@ -18,6 +21,16 @@ from google.cloud.firestore_v1 import FieldFilter
 from common import cors_preflight, db, json_response, require_api_key, validate_webhook_url
 
 MAX_WEBHOOKS_PER_SUBSCRIBER = 20
+
+# Poll-queue fallback (see ingest.py's _enqueue_for_poll): a webhook's
+# real-time push attempt gets ~10s total (2 attempts x 5s timeout, no
+# backoff) before giving up — if that fails, the notification is queued
+# here instead of being dropped outright, so a subscriber that was briefly
+# down can still pick it up later via GET .../queue, as long as they poll
+# within queueTtlSeconds of it landing.
+DEFAULT_QUEUE_TTL_SECONDS = 3600
+MAX_QUEUE_TTL_SECONDS = 86400
+MAX_QUEUE_POLL_LIMIT = 50
 
 
 def _route(req: https_fn.Request) -> tuple[str | None, str | None]:
@@ -42,6 +55,16 @@ def _validate_filter(filter_data) -> str | None:
     condition = filter_data.get("condition")
     if not isinstance(condition, dict) or not condition.get("type"):
         return "filter.condition with a type is required."
+    return None
+
+
+def _validate_queue_ttl(value) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        return "queueTtlSeconds must be a positive integer."
+    if value > MAX_QUEUE_TTL_SECONDS:
+        return f"queueTtlSeconds cannot exceed {MAX_QUEUE_TTL_SECONDS}."
     return None
 
 
@@ -83,6 +106,10 @@ def _create_webhook(req: https_fn.Request, subscriber_id: str) -> https_fn.Respo
     if filter_error:
         return json_response({"error": filter_error}, 400)
 
+    queue_ttl_error = _validate_queue_ttl(body.get("queueTtlSeconds"))
+    if queue_ttl_error:
+        return json_response({"error": queue_ttl_error}, 400)
+
     doc_ref = db().collection("webhooks").document()
     doc_ref.set(
         {
@@ -90,6 +117,7 @@ def _create_webhook(req: https_fn.Request, subscriber_id: str) -> https_fn.Respo
             "url": url,
             "headers": body.get("headers") or {},
             "filter": body["filter"],
+            "queueTtlSeconds": body.get("queueTtlSeconds") or DEFAULT_QUEUE_TTL_SECONDS,
             "createdAt": firestore.SERVER_TIMESTAMP,
         }
     )
@@ -115,6 +143,11 @@ def _update_webhook(req: https_fn.Request, subscriber_id: str, webhook_id: str) 
         if filter_error:
             return json_response({"error": filter_error}, 400)
         update["filter"] = body["filter"]
+    if "queueTtlSeconds" in body:
+        queue_ttl_error = _validate_queue_ttl(body["queueTtlSeconds"])
+        if queue_ttl_error:
+            return json_response({"error": queue_ttl_error}, 400)
+        update["queueTtlSeconds"] = body["queueTtlSeconds"]
 
     if not update:
         return json_response({"error": "No updatable fields provided."}, 400)
@@ -127,6 +160,12 @@ def _delete_webhook(subscriber_id: str, webhook_id: str) -> https_fn.Response:
     doc = _own_webhook_or_none(webhook_id, subscriber_id)
     if doc is None:
         return json_response({"error": "Webhook not found."}, 404)
+    queued = list(db().collection("webhook_queue").where(filter=FieldFilter("webhookId", "==", webhook_id)).stream())
+    batch = db().batch()
+    for q in queued:
+        batch.delete(q.reference)
+    if queued:
+        batch.commit()
     doc.reference.delete()
     return json_response({"ok": True})
 
@@ -153,7 +192,43 @@ def _test_webhook(subscriber_id: str, webhook_id: str) -> https_fn.Response:
         )
         return json_response({"ok": response.ok, "httpCode": response.status_code})
     except requests.RequestException as exc:
+        logging.warning("Webhook test delivery failed: webhook=%s subscriber=%s: %s", webhook_id, subscriber_id, exc)
         return json_response({"ok": False, "error": str(exc)}, 502)
+
+
+def _poll_queue(subscriber_id: str, webhook_id: str) -> https_fn.Response:
+    """Pop-style: whatever's returned here is deleted immediately, before
+    the response is even built — at-most-once delivery. This is the
+    fallback path for when the real-time push attempt in ingest.py failed
+    (see _enqueue_for_poll there); a subscriber that was briefly down can
+    still pick up anything still within its TTL by polling. Items past
+    their TTL are excluded here regardless of whether Firestore's own
+    background TTL sweep has physically deleted them yet (that sweep can
+    lag up to ~24h — this query is the actual correctness boundary, native
+    TTL is only for eventual storage cleanup of never-polled items)."""
+    doc = _own_webhook_or_none(webhook_id, subscriber_id)
+    if doc is None:
+        return json_response({"error": "Webhook not found."}, 404)
+
+    now = datetime.now(timezone.utc)
+    query = (
+        db().collection("webhook_queue")
+        .where(filter=FieldFilter("webhookId", "==", webhook_id))
+        .where(filter=FieldFilter("expiresAt", ">", now))
+        .order_by("expiresAt")
+        .limit(MAX_QUEUE_POLL_LIMIT)
+    )
+    docs = list(query.stream())
+    entries = [d.to_dict() or {} for d in docs]
+    items = [{"notification": e.get("notification"), "matchedRule": e.get("matchedRule")} for e in entries]
+
+    batch = db().batch()
+    for d in docs:
+        batch.delete(d.reference)
+    if docs:
+        batch.commit()
+
+    return json_response({"items": items})
 
 
 @https_fn.on_request(invoker="public")
@@ -174,6 +249,8 @@ def webhooks_api(req: https_fn.Request) -> https_fn.Response:
         return _create_webhook(req, subscriber_id)
     if webhook_id and action == "test" and req.method == "POST":
         return _test_webhook(subscriber_id, webhook_id)
+    if webhook_id and action == "queue" and req.method == "GET":
+        return _poll_queue(subscriber_id, webhook_id)
     if webhook_id and action is None and req.method == "PATCH":
         return _update_webhook(req, subscriber_id, webhook_id)
     if webhook_id and action is None and req.method == "DELETE":

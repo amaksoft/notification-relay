@@ -8,6 +8,7 @@ webhooks_api.py; this module only ever touches the `subscribers`
 collection (plus a cascade-delete of a subscriber's webhooks on disable).
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from firebase_admin import firestore
@@ -31,7 +32,7 @@ def _delete_subscriber_webhooks(subscriber_id: str) -> int:
 
 
 def _delete_subscriber_logs(subscriber_id: str) -> None:
-    for collection_name in ("delivery_log", "test_deliveries"):
+    for collection_name in ("delivery_log", "test_deliveries", "access_requests", "webhook_queue"):
         docs = list(
             db().collection(collection_name).where(filter=FieldFilter("subscriberId", "==", subscriber_id)).stream()
         )
@@ -40,6 +41,18 @@ def _delete_subscriber_logs(subscriber_id: str) -> None:
             batch.delete(doc.reference)
         if docs:
             batch.commit()
+
+
+def _hard_delete_subscriber(subscriber_id: str) -> int:
+    """Fully removes a subscriber: its webhooks, delivery/test-delivery/
+    access-request logs, and the subscriber doc itself. No reason to keep
+    e.g. a short-lived e2e-test subscriber's records around forever —
+    used both by the owner-invoked delete_subscriber callable and by
+    purge_expired_subscribers once a subscriber's TTL has passed."""
+    webhooks_deleted = _delete_subscriber_webhooks(subscriber_id)
+    _delete_subscriber_logs(subscriber_id)
+    db().collection("subscribers").document(subscriber_id).delete()
+    return webhooks_deleted
 
 
 @https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET, invoker="public")
@@ -73,16 +86,19 @@ def create_subscriber(request: https_fn.CallableRequest) -> dict:
     return {"id": doc_ref.id, "apiKey": raw_key}
 
 
-@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET, invoker="public")
-def grant_subscriber_access(request: https_fn.CallableRequest) -> dict:
-    require_admin(request)
-    data = request.data or {}
-    subscriber_id = data.get("subscriberId")
-    package = data.get("package")
-    channel_ids = data.get("channelIds")  # omitted/None = whole package
-    if not subscriber_id or not package:
-        raise HttpsError(FunctionsErrorCode.INVALID_ARGUMENT, "subscriberId and package are required.")
+def _validate_grant_entry(entry: dict) -> str | None:
+    if not isinstance(entry, dict) or not entry.get("package"):
+        return "each grant entry needs a package."
+    return None
 
+
+def merge_grants_into_subscriber(subscriber_id: str, new_grants: list[dict]) -> dict:
+    """Shared by grant_subscriber_access (owner-initiated) and
+    approve_access_request (subscriber-requested, owner-approved) — both
+    end up doing exactly the same merge. Each entry is {package,
+    channelIds?, deviceIds?}; an entry replaces any existing grant for the
+    same package. Raises HttpsError NOT_FOUND if the subscriber doesn't
+    exist. Returns the updated grants dict."""
     doc_ref = db().collection("subscribers").document(subscriber_id)
     doc = doc_ref.get()
     if not doc.exists:
@@ -91,13 +107,40 @@ def grant_subscriber_access(request: https_fn.CallableRequest) -> dict:
     subscriber = doc.to_dict() or {}
     grants = subscriber.get("grants") or {"grants": []}
     grant_list = grants.get("grants", [])
-    grant_list = [g for g in grant_list if g.get("package") != package]
-    new_grant = {"package": package}
-    if channel_ids:
-        new_grant["channelIds"] = channel_ids
-    grant_list.append(new_grant)
+    incoming_packages = {entry["package"] for entry in new_grants}
+    grant_list = [g for g in grant_list if g.get("package") not in incoming_packages]
+    for entry in new_grants:
+        merged = {"package": entry["package"]}
+        if entry.get("channelIds"):
+            merged["channelIds"] = entry["channelIds"]
+        if entry.get("deviceIds"):
+            merged["deviceIds"] = entry["deviceIds"]
+        grant_list.append(merged)
     grants["grants"] = grant_list
     doc_ref.update({"grants": grants})
+    return grants
+
+
+@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET, invoker="public")
+def grant_subscriber_access(request: https_fn.CallableRequest) -> dict:
+    """Merges one or more grant entries into a subscriber's grants in a
+    single call (batch — see plan divergence: granting several apps/
+    channels/devices at once shouldn't need one round-trip per package).
+    Each entry is {package, channelIds?, deviceIds?}; channelIds/deviceIds
+    omitted means "no restriction on that dimension" (see
+    condition_matcher.is_in_grant)."""
+    require_admin(request)
+    data = request.data or {}
+    subscriber_id = data.get("subscriberId")
+    new_grants = data.get("grants")
+    if not subscriber_id or not isinstance(new_grants, list) or not new_grants:
+        raise HttpsError(FunctionsErrorCode.INVALID_ARGUMENT, "subscriberId and a non-empty grants array are required.")
+    for entry in new_grants:
+        error = _validate_grant_entry(entry)
+        if error:
+            raise HttpsError(FunctionsErrorCode.INVALID_ARGUMENT, error)
+
+    grants = merge_grants_into_subscriber(subscriber_id, new_grants)
     return {"grants": grants}
 
 
@@ -106,9 +149,9 @@ def revoke_subscriber_access(request: https_fn.CallableRequest) -> dict:
     require_admin(request)
     data = request.data or {}
     subscriber_id = data.get("subscriberId")
-    package = data.get("package")
-    if not subscriber_id or not package:
-        raise HttpsError(FunctionsErrorCode.INVALID_ARGUMENT, "subscriberId and package are required.")
+    packages = data.get("packages")
+    if not subscriber_id or not isinstance(packages, list) or not packages:
+        raise HttpsError(FunctionsErrorCode.INVALID_ARGUMENT, "subscriberId and a non-empty packages array are required.")
 
     doc_ref = db().collection("subscribers").document(subscriber_id)
     doc = doc_ref.get()
@@ -117,7 +160,7 @@ def revoke_subscriber_access(request: https_fn.CallableRequest) -> dict:
 
     subscriber = doc.to_dict() or {}
     grants = subscriber.get("grants") or {"grants": []}
-    grant_list = [g for g in grants.get("grants", []) if g.get("package") != package]
+    grant_list = [g for g in grants.get("grants", []) if g.get("package") not in packages]
     grants["grants"] = grant_list
     doc_ref.update({"grants": grants})
     return {"grants": grants}
@@ -152,13 +195,34 @@ def disable_subscriber(request: https_fn.CallableRequest) -> dict:
     return {"ok": True, "webhooksDeleted": deleted}
 
 
+@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET, invoker="public")
+def delete_subscriber(request: https_fn.CallableRequest) -> dict:
+    """Hard delete — permanently removes the subscriber doc itself, not
+    just its webhooks (see disable_subscriber for the reversible, soft
+    version). Works regardless of current enabled state."""
+    require_admin(request)
+    data = request.data or {}
+    subscriber_id = data.get("subscriberId")
+    if not subscriber_id:
+        raise HttpsError(FunctionsErrorCode.INVALID_ARGUMENT, "subscriberId is required.")
+
+    doc_ref = db().collection("subscribers").document(subscriber_id)
+    if not doc_ref.get().exists:
+        raise HttpsError(FunctionsErrorCode.NOT_FOUND, "Subscriber not found.")
+
+    webhooks_deleted = _hard_delete_subscriber(subscriber_id)
+    return {"ok": True, "webhooksDeleted": webhooks_deleted}
+
+
 @scheduler_fn.on_schedule(schedule="every 60 minutes", secrets=ALLOWED_EMAILS_SECRET)
 def purge_expired_subscribers(event: scheduler_fn.ScheduledEvent) -> None:
     """General safety net for any short-lived subscriber (test or not,
-    see plan) — not test-only machinery. Disables + deletes webhooks and
-    prunes logs for anything past its expiresAt."""
+    see plan) — not test-only machinery. Hard-deletes (not just disables)
+    anything past its expiresAt: there's no reason to keep e.g. an
+    e2e-test subscriber's record around forever just because it once
+    existed — see _hard_delete_subscriber."""
     now = datetime.now(timezone.utc)
-    expired = (
+    expired = list(
         db()
         .collection("subscribers")
         .where(filter=FieldFilter("enabled", "==", True))
@@ -166,7 +230,9 @@ def purge_expired_subscribers(event: scheduler_fn.ScheduledEvent) -> None:
         .stream()
     )
     for doc in expired:
-        subscriber_id = doc.id
-        doc.reference.update({"enabled": False})
-        _delete_subscriber_webhooks(subscriber_id)
-        _delete_subscriber_logs(subscriber_id)
+        _hard_delete_subscriber(doc.id)
+
+    # INFO even on a no-op run (not just when something was purged) - the
+    # only way to tell "this ran and found nothing" apart from "this
+    # silently stopped running" from Cloud Logging alone.
+    logging.info("purge_expired_subscribers: purged %d expired subscriber(s)", len(expired))

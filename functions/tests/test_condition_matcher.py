@@ -62,31 +62,31 @@ class TestThrottleAllows:
 
 class TestIsInGrant:
     def test_allow_all(self):
-        assert is_in_grant("com.slack", "any_channel", {"allowAll": True}) is True
+        assert is_in_grant("com.slack", "any_channel", "any_device", {"allowAll": True}) is True
 
     def test_no_grants_denies(self):
-        assert is_in_grant("com.slack", "dm", {"grants": []}) is False
+        assert is_in_grant("com.slack", "dm", "device_1", {"grants": []}) is False
 
     def test_none_grants_denies(self):
-        assert is_in_grant("com.slack", "dm", None) is False
+        assert is_in_grant("com.slack", "dm", "device_1", None) is False
 
     def test_whole_package_grant_allows_any_channel(self):
         grants = {"grants": [{"package": "com.slack"}]}
-        assert is_in_grant("com.slack", "dm_channel", grants) is True
-        assert is_in_grant("com.slack", "alerts_channel", grants) is True
+        assert is_in_grant("com.slack", "dm_channel", "device_1", grants) is True
+        assert is_in_grant("com.slack", "alerts_channel", "device_1", grants) is True
 
     def test_whole_package_grant_denies_other_package(self):
         grants = {"grants": [{"package": "com.slack"}]}
-        assert is_in_grant("com.whatsapp", "dm_channel", grants) is False
+        assert is_in_grant("com.whatsapp", "dm_channel", "device_1", grants) is False
 
     def test_channel_scoped_grant_allows_only_that_channel(self):
         grants = {"grants": [{"package": "com.whatsapp", "channelIds": ["calls_channel"]}]}
-        assert is_in_grant("com.whatsapp", "calls_channel", grants) is True
-        assert is_in_grant("com.whatsapp", "messages_channel", grants) is False
+        assert is_in_grant("com.whatsapp", "calls_channel", "device_1", grants) is True
+        assert is_in_grant("com.whatsapp", "messages_channel", "device_1", grants) is False
 
     def test_channel_scoped_grant_denies_other_package_even_with_same_channel_id(self):
         grants = {"grants": [{"package": "com.whatsapp", "channelIds": ["calls_channel"]}]}
-        assert is_in_grant("com.slack", "calls_channel", grants) is False
+        assert is_in_grant("com.slack", "calls_channel", "device_1", grants) is False
 
     def test_multiple_grants_any_can_match(self):
         grants = {
@@ -95,9 +95,24 @@ class TestIsInGrant:
                 {"package": "com.whatsapp", "channelIds": ["calls_channel"]},
             ]
         }
-        assert is_in_grant("com.slack", "anything", grants) is True
-        assert is_in_grant("com.whatsapp", "calls_channel", grants) is True
-        assert is_in_grant("com.whatsapp", "messages_channel", grants) is False
+        assert is_in_grant("com.slack", "anything", "device_1", grants) is True
+        assert is_in_grant("com.whatsapp", "calls_channel", "device_1", grants) is True
+        assert is_in_grant("com.whatsapp", "messages_channel", "device_1", grants) is False
+
+    def test_device_scoped_grant_allows_only_that_device(self):
+        grants = {"grants": [{"package": "com.whatsapp", "deviceIds": ["pixel-8"]}]}
+        assert is_in_grant("com.whatsapp", "any_channel", "pixel-8", grants) is True
+        assert is_in_grant("com.whatsapp", "any_channel", "other-phone", grants) is False
+
+    def test_channel_and_device_scoped_grant_requires_both(self):
+        grants = {
+            "grants": [
+                {"package": "com.whatsapp", "channelIds": ["calls_channel"], "deviceIds": ["pixel-8"]}
+            ]
+        }
+        assert is_in_grant("com.whatsapp", "calls_channel", "pixel-8", grants) is True
+        assert is_in_grant("com.whatsapp", "calls_channel", "other-phone", grants) is False
+        assert is_in_grant("com.whatsapp", "messages_channel", "pixel-8", grants) is False
 
     # --- Adversarial: the grant gate must hold regardless of what a
     # subscriber's own Condition tree looks like (see plan Architecture
@@ -114,10 +129,10 @@ class TestIsInGrant:
                 {"type": "ALWAYS", "inverse": True},
             ],
         }
-        notification = {"package": "com.slack", "channelId": "dm_channel"}
+        notification = {"package": "com.slack", "channelId": "dm_channel", "deviceId": "device_1"}
         # The subscriber's Condition matches everything...
         assert evaluate_condition(adversarial_condition, notification) is True
         # ...but the gate for this (package, channel) still denies it, and
         # per the design the gate is checked first and short-circuits
         # before the Condition is ever evaluated.
-        assert is_in_grant(notification["package"], notification["channelId"], grants) is False
+        assert is_in_grant(notification["package"], notification["channelId"], notification["deviceId"], grants) is False

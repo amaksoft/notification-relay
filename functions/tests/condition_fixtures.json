@@ -60,6 +60,18 @@
     "expected": false
   },
   {
+    "name": "device_id_exact_match",
+    "condition": { "type": "NOTIFICATION_DEVICE_ID", "stringValue": "pixel-8" },
+    "notification": { "deviceId": "pixel-8" },
+    "expected": true
+  },
+  {
+    "name": "device_id_no_match",
+    "condition": { "type": "NOTIFICATION_DEVICE_ID", "stringValue": "pixel-8" },
+    "notification": { "deviceId": "other-phone" },
+    "expected": false
+  },
+  {
     "name": "flag_set_bitmask_match",
     "condition": { "type": "NOTIFICATION_FLAG_SET", "intValue": 2 },
     "notification": { "flags": 6 },

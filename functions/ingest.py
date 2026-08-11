@@ -15,6 +15,7 @@ outside the subscriber's granted scope.
 
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 import requests
 from firebase_admin import firestore
@@ -23,6 +24,7 @@ from firebase_functions.https_fn import FunctionsErrorCode, HttpsError
 
 from common import db, require_admin
 from condition_matcher import is_in_grant, rule_matches, throttle_allows
+from webhooks_api import DEFAULT_QUEUE_TTL_SECONDS
 
 DELIVERY_TIMEOUT_SECONDS = 5
 DELIVERY_ATTEMPTS = 2
@@ -78,6 +80,7 @@ def _log_delivery(webhook_id: str, subscriber_id: str, notification: dict, match
             "notificationSummary": {
                 "package": notification.get("package"),
                 "channelId": notification.get("channelId"),
+                "deviceId": notification.get("deviceId"),
                 "title": notification.get("title"),
             },
             "matchedRule": matched_rule_name,
@@ -85,6 +88,30 @@ def _log_delivery(webhook_id: str, subscriber_id: str, notification: dict, match
             "httpCode": http_code,
             "error": error,
             "timestamp": firestore.SERVER_TIMESTAMP,
+        }
+    )
+
+
+def _enqueue_for_poll(webhook_id: str, subscriber_id: str, notification: dict,
+                       matched_rule_name: str | None, queue_ttl_seconds: int) -> None:
+    """Fallback for when the real-time push attempt failed (see
+    webhooks_api.DEFAULT_QUEUE_TTL_SECONDS docstring) — only ever called on
+    push failure, never on success, so a subscriber gets exactly one
+    delivery: push if they were up, poll if they weren't. `expiresAt` must
+    stay an actual Firestore Timestamp (not a raw number) — that's a hard
+    requirement for Firestore's native per-collection TTL policy (see
+    OPERATIONS.md) to pick this field up at all; webhooks_api._poll_queue's
+    own query (expiresAt > now) is still the real correctness boundary
+    though, since that native sweep can lag up to ~24h and only exists for
+    storage cleanup of never-polled items."""
+    db().collection("webhook_queue").document().set(
+        {
+            "webhookId": webhook_id,
+            "subscriberId": subscriber_id,
+            "notification": notification,
+            "matchedRule": matched_rule_name,
+            "createdAt": firestore.SERVER_TIMESTAMP,
+            "expiresAt": datetime.now(timezone.utc) + timedelta(seconds=queue_ttl_seconds),
         }
     )
 
@@ -97,32 +124,58 @@ def ingest_notification(request: https_fn.CallableRequest) -> dict:
     now = time.time()
     subscriber_cache: dict = {}
     matched = []
+    webhook_docs = list(db().collection("webhooks").stream())
 
-    for doc in db().collection("webhooks").stream():
-        webhook = doc.to_dict() or {}
+    for doc in webhook_docs:
         webhook_id = doc.id
-        filter_rule = webhook.get("filter") or {}
-        subscriber_id = webhook.get("subscriberId")
+        try:
+            webhook = doc.to_dict() or {}
+            filter_rule = webhook.get("filter") or {}
+            subscriber_id = webhook.get("subscriberId")
 
-        subscriber = _enabled_subscriber(subscriber_id, subscriber_cache) if subscriber_id else None
-        if subscriber is None:
-            continue
+            subscriber = _enabled_subscriber(subscriber_id, subscriber_cache) if subscriber_id else None
+            if subscriber is None:
+                continue
 
-        if not is_in_grant(notification["package"], notification.get("channelId"), subscriber.get("grants")):
-            continue
+            if not is_in_grant(
+                notification["package"], notification.get("channelId"), notification.get("deviceId"),
+                subscriber.get("grants"),
+            ):
+                continue
 
-        if not rule_matches(filter_rule, notification):
-            continue
+            if not rule_matches(filter_rule, notification):
+                continue
 
-        throttle_seconds = filter_rule.get("throttleSeconds", 0)
-        last_fired_at = webhook.get("lastFiredAt")
-        if not throttle_allows(last_fired_at, throttle_seconds, now):
-            continue
+            throttle_seconds = filter_rule.get("throttleSeconds", 0)
+            last_fired_at = webhook.get("lastFiredAt")
+            if not throttle_allows(last_fired_at, throttle_seconds, now):
+                continue
 
-        doc.reference.update({"lastFiredAt": now})
-        matched_rule_name = filter_rule.get("name")
-        success, http_code, error = _deliver(webhook, notification, matched_rule_name)
-        _log_delivery(webhook_id, subscriber_id, notification, matched_rule_name, success, http_code, error)
-        matched.append({"webhookId": webhook_id, "delivered": success})
+            doc.reference.update({"lastFiredAt": now})
+            matched_rule_name = filter_rule.get("name")
+            success, http_code, error = _deliver(webhook, notification, matched_rule_name)
+            _log_delivery(webhook_id, subscriber_id, notification, matched_rule_name, success, http_code, error)
+            matched.append({"webhookId": webhook_id, "delivered": success})
+            if not success:
+                logging.error(
+                    "Webhook delivery exhausted retries: webhook=%s subscriber=%s url=%s httpCode=%s error=%s",
+                    webhook_id, subscriber_id, webhook.get("url"), http_code, error,
+                )
+                queue_ttl_seconds = webhook.get("queueTtlSeconds") or DEFAULT_QUEUE_TTL_SECONDS
+                _enqueue_for_poll(webhook_id, subscriber_id, notification, matched_rule_name, queue_ttl_seconds)
+                logging.info(
+                    "Queued for poll fallback: webhook=%s subscriber=%s ttlSeconds=%d",
+                    webhook_id, subscriber_id, queue_ttl_seconds,
+                )
+        except Exception:
+            # One malformed/misbehaving webhook (e.g. a subscriber-submitted
+            # filter with an invalid Condition shape) must never abort
+            # delivery to every other webhook in this loop — log it as a
+            # real error (picked up by Cloud Error Reporting) and move on.
+            logging.exception("Unexpected error processing webhook %s during ingest", webhook_id)
 
+    logging.info(
+        "ingest_notification: package=%s channelId=%s webhooksConsidered=%d matched=%d",
+        notification.get("package"), notification.get("channelId"), len(webhook_docs), len(matched),
+    )
     return {"matched": len(matched), "results": matched}

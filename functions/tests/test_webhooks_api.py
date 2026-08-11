@@ -6,7 +6,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from common import validate_webhook_url  # noqa: E402
-from webhooks_api import _route, _validate_filter  # noqa: E402
+from webhooks_api import MAX_QUEUE_TTL_SECONDS, _route, _validate_filter, _validate_queue_ttl  # noqa: E402
 
 
 class FakeRequest:
@@ -61,6 +61,9 @@ class TestRoute:
     def test_test_action_path(self):
         assert _route(FakeRequest("/api/webhooks/abc123/test")) == ("abc123", "test")
 
+    def test_queue_action_path(self):
+        assert _route(FakeRequest("/api/webhooks/abc123/queue")) == ("abc123", "queue")
+
     def test_raw_function_url_no_webhooks_segment(self):
         # Hitting the function directly (not via the Hosting /api/webhooks
         # rewrite) never has a literal "webhooks" path segment at all —
@@ -68,6 +71,7 @@ class TestRoute:
         assert _route(FakeRequest("/")) == (None, None)
         assert _route(FakeRequest("/abc123")) == ("abc123", None)
         assert _route(FakeRequest("/abc123/test")) == ("abc123", "test")
+        assert _route(FakeRequest("/abc123/queue")) == ("abc123", "queue")
 
 
 class TestValidateFilter:
@@ -82,3 +86,31 @@ class TestValidateFilter:
 
     def test_not_a_dict(self):
         assert _validate_filter("nope") is not None
+
+
+class TestValidateQueueTtl:
+    def test_none_is_ok(self):
+        # omitted entirely = fall back to DEFAULT_QUEUE_TTL_SECONDS
+        assert _validate_queue_ttl(None) is None
+
+    def test_positive_int_ok(self):
+        assert _validate_queue_ttl(60) is None
+        assert _validate_queue_ttl(MAX_QUEUE_TTL_SECONDS) is None
+
+    def test_zero_rejected(self):
+        assert _validate_queue_ttl(0) is not None
+
+    def test_negative_rejected(self):
+        assert _validate_queue_ttl(-1) is not None
+
+    def test_over_max_rejected(self):
+        assert _validate_queue_ttl(MAX_QUEUE_TTL_SECONDS + 1) is not None
+
+    def test_non_int_rejected(self):
+        assert _validate_queue_ttl("3600") is not None
+        assert _validate_queue_ttl(60.5) is not None
+
+    def test_bool_rejected(self):
+        # bool is a subclass of int in Python — True/False must not sneak
+        # through as 1/0.
+        assert _validate_queue_ttl(True) is not None

@@ -7,6 +7,7 @@ and subscriber API-key lookup for the client-driven webhook API.
 import hashlib
 import ipaddress
 import json
+import logging
 import os
 import secrets
 from urllib.parse import urlparse
@@ -18,6 +19,12 @@ from firebase_functions import https_fn
 from firebase_functions.https_fn import FunctionsErrorCode, HttpsError
 
 firebase_admin.initialize_app()
+
+# Python's root logger defaults to WARNING, which silently drops every
+# logging.info() call in this codebase (confirmed missing from Cloud
+# Logging entirely, not just filtered client-side) — every module here
+# imports common first, so this is the one place to fix it project-wide.
+logging.getLogger().setLevel(logging.INFO)
 
 _db = None
 

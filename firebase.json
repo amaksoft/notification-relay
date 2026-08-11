@@ -40,6 +40,10 @@
         "function": { "functionId": "test_receiver", "region": "us-central1" }
       },
       {
+        "source": "/api/access-requests",
+        "function": { "functionId": "access_requests_api", "region": "us-central1" }
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

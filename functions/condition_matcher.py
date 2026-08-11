@@ -52,6 +52,8 @@ def evaluate_condition(condition: Condition, notification: Notification) -> bool
         result = notification.get("package") == condition.get("stringValue")
     elif node_type == "NOTIFICATION_CHANNEL_ID":
         result = notification.get("channelId") == condition.get("stringValue")
+    elif node_type == "NOTIFICATION_DEVICE_ID":
+        result = notification.get("deviceId") == condition.get("stringValue")
     elif node_type == "NOTIFICATION_FLAG_SET":
         flags = int(notification.get("flags") or 0)
         mask = int(condition.get("intValue") or 0)
@@ -87,13 +89,17 @@ def throttle_allows(last_fired_at: float | None, throttle_seconds: int, now: flo
     return (now - last_fired_at) >= throttle_seconds
 
 
-def is_in_grant(package: str, channel_id: str | None, grants: Grants | None) -> bool:
+def is_in_grant(package: str, channel_id: str | None, device_id: str | None, grants: Grants | None) -> bool:
     """The runtime pre-filter gate for subscriber scope (see plan
     Architecture overview / RULE_SCHEMA.md Grant scope): checked BEFORE
     the subscriber's own webhook Condition ever runs, so no Condition tree
     -- however adversarial with OR/NOT -- can ever match outside the
     grant. `grants` is the subscriber doc's grant shape:
-    {"allowAll": true} or {"grants": [{"package": ..., "channelIds": [...]?}]}.
+    {"allowAll": true} or
+    {"grants": [{"package": ..., "channelIds": [...]?, "deviceIds": [...]?}]}.
+    Omitting channelIds/deviceIds on a grant entry means "no restriction on
+    that dimension" (whole package, any channel/device) — each dimension is
+    independently AND'd when present.
     """
     if not grants:
         return False
@@ -103,8 +109,10 @@ def is_in_grant(package: str, channel_id: str | None, grants: Grants | None) -> 
         if grant.get("package") != package:
             continue
         channel_ids = grant.get("channelIds")
-        if not channel_ids:  # whole-package grant, no channel restriction
-            return True
-        if channel_id in channel_ids:
-            return True
+        if channel_ids and channel_id not in channel_ids:
+            continue
+        device_ids = grant.get("deviceIds")
+        if device_ids and device_id not in device_ids:
+            continue
+        return True
     return False
