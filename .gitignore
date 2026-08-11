@@ -32,6 +32,10 @@ android/.gradle/
 android/local.properties
 android/**/*.apk
 android/**/*.aab
+# Firebase config — regenerate via android/scripts/fetch_google_services.sh
+# (see docs/OPERATIONS.md); not a real secret (it's baked into every built
+# APK regardless), gitignored per user preference rather than for security.
+android/app/google-services.json
 
 # OS / editor
 .DS_Store

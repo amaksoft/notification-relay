@@ -20,6 +20,11 @@ machine** — never assume it's already there.
   Accounts → "Generate new private key", or `gcloud iam service-accounts keys create`. Without this
   file, every `notifrelay` command that isn't purely local/adb will fail at startup with a clear
   "credentials not found" error (fail loud, not silently).
+- `android/app/google-services.json` — Firebase Android app config (API key, project id, OAuth
+  client id for Google Sign-In). Regenerate with `android/scripts/fetch_google_services.sh` (needs
+  `firebase login`). Gitignored by user preference, not because the key is a real secret — it's
+  Firebase's public client key, baked into every built APK either way; Firestore/Auth security comes
+  from security rules and the ALLOWED_EMAILS allowlist, not from this file staying hidden.
 
 ## Deploying
 
