@@ -2,13 +2,14 @@ package com.amaksoft.notifrelay.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AssistChip
@@ -33,7 +34,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.amaksoft.notifrelay.AppInfo
 import com.amaksoft.notifrelay.data.SeenChannelEntity
@@ -41,6 +41,21 @@ import com.amaksoft.notifrelay.ui.NodeKind
 import com.amaksoft.notifrelay.ui.ConditionNode
 
 private val LeafKinds = listOf(NodeKind.PACKAGE, NodeKind.CHANNEL, NodeKind.TITLE, NodeKind.TEXT, NodeKind.FLAGS, NodeKind.ALWAYS)
+
+/** Common android.app.Notification flag bits — a legend, not an
+ * exhaustive list, so users aren't expected to know/compute bitmask
+ * arithmetic by hand. Selecting chips ORs the bits together into
+ * node.intValue automatically. */
+private val KnownFlags = listOf(
+    2 to "Ongoing",
+    4 to "Insistent",
+    8 to "Alert once",
+    16 to "Auto-cancel",
+    32 to "No clear",
+    64 to "Foreground service",
+    256 to "Local only",
+    512 to "Group summary",
+)
 
 private fun NodeKind.displayName(): String = when (this) {
     NodeKind.PACKAGE -> "App"
@@ -68,6 +83,7 @@ fun ConditionTreeEditor(
     seenChannels: List<SeenChannelEntity>,
     depth: Int = 0,
     onRemove: (() -> Unit)? = null,
+    siblingPackageHint: String? = null,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -93,6 +109,15 @@ fun ConditionTreeEditor(
         Spacer(Modifier.height(4.dp))
 
         if (node.kind.isGroup) {
+            // A channel leaf inside this group can only ever mean
+            // something once paired with a package (channel ids are only
+            // unique within a package's namespace, see docs/RULE_SCHEMA.md)
+            // — so scope the channel picker to whichever package sibling
+            // is set, rather than showing every channel from every app.
+            val siblingPackage = node.children
+                .firstOrNull { it.kind == NodeKind.PACKAGE && it.stringValue.isNotBlank() }
+                ?.stringValue
+
             Card(
                 modifier = Modifier.padding(start = 16.dp).fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
@@ -105,6 +130,7 @@ fun ConditionTreeEditor(
                             seenChannels = seenChannels,
                             depth = depth + 1,
                             onRemove = { node.children.removeAt(index) },
+                            siblingPackageHint = siblingPackage,
                         )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -118,7 +144,7 @@ fun ConditionTreeEditor(
                 }
             }
         } else {
-            LeafValueEditor(node, installedApps, seenChannels)
+            LeafValueEditor(node, installedApps, seenChannels, siblingPackageHint)
         }
     }
 }
@@ -158,8 +184,14 @@ private fun LeafKindSelector(node: ConditionNode) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun LeafValueEditor(node: ConditionNode, installedApps: List<AppInfo>, seenChannels: List<SeenChannelEntity>) {
+private fun LeafValueEditor(
+    node: ConditionNode,
+    installedApps: List<AppInfo>,
+    seenChannels: List<SeenChannelEntity>,
+    siblingPackageHint: String?,
+) {
     when (node.kind) {
         NodeKind.PACKAGE -> AutocompleteField(
             label = "App",
@@ -171,15 +203,29 @@ private fun LeafValueEditor(node: ConditionNode, installedApps: List<AppInfo>, s
             leadingIcon = { app -> AppIcon(app.packageName) },
             modifier = Modifier.fillMaxWidth(),
         )
-        NodeKind.CHANNEL -> AutocompleteField(
-            label = "Channel",
-            options = seenChannels,
-            optionLabel = { it.channelName },
-            optionSubtitle = { "${it.packageName} · ${it.channelId}" },
-            onOptionSelected = { node.stringValue = it.channelId },
-            initialQuery = seenChannels.find { it.channelId == node.stringValue }?.channelName ?: node.stringValue,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        NodeKind.CHANNEL -> {
+            val scopedChannels = if (siblingPackageHint != null) {
+                seenChannels.filter { it.packageName == siblingPackageHint }
+            } else {
+                seenChannels
+            }
+            AutocompleteField(
+                label = "Channel",
+                options = scopedChannels,
+                optionLabel = { it.channelName },
+                optionSubtitle = { if (siblingPackageHint != null) it.channelId else "${it.packageName} · ${it.channelId}" },
+                onOptionSelected = { node.stringValue = it.channelId },
+                initialQuery = seenChannels.find { it.channelId == node.stringValue }?.channelName ?: node.stringValue,
+                supportingText = if (scopedChannels.isEmpty()) {
+                    if (siblingPackageHint != null) {
+                        "No channels seen yet for this app — leave blank to match any channel"
+                    } else {
+                        "No channels seen yet on this device — add a package condition first, or leave blank to match any channel"
+                    }
+                } else null,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         NodeKind.TITLE -> OutlinedTextField(
             value = node.stringValue,
             onValueChange = { node.stringValue = it },
@@ -194,14 +240,33 @@ private fun LeafValueEditor(node: ConditionNode, installedApps: List<AppInfo>, s
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        NodeKind.FLAGS -> OutlinedTextField(
-            value = node.intValue,
-            onValueChange = { node.intValue = it.filter { c -> c.isDigit() } },
-            label = { Text("Flag bitmask") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth(),
-        )
+        NodeKind.FLAGS -> {
+            val current = node.intValue.toIntOrNull() ?: 0
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "Any selected flag matches (OR'd together):",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    KnownFlags.forEach { (bit, label) ->
+                        val selected = (current and bit) != 0
+                        FilterChip(
+                            selected = selected,
+                            onClick = {
+                                node.intValue = (if (selected) current and bit.inv() else current or bit).toString()
+                            },
+                            label = { Text("$label ($bit)") },
+                        )
+                    }
+                }
+                Text(
+                    "Bitmask value: $current",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         NodeKind.ALWAYS -> Text(
             "Matches every notification",
             style = MaterialTheme.typography.bodyMedium,
