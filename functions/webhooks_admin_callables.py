@@ -6,11 +6,12 @@ creates/edits/deletes a webhook, only lists them for the admin UI/CLI.
 """
 
 from firebase_functions import https_fn
+from google.cloud.firestore_v1 import FieldFilter
 
 from common import db, require_admin
 
 
-@https_fn.on_call(secrets=["ALLOWED_EMAILS"])
+@https_fn.on_call(secrets=["ALLOWED_EMAILS"], invoker="public")
 def list_all_webhooks(request: https_fn.CallableRequest) -> dict:
     require_admin(request)
     data = request.data or {}
@@ -18,7 +19,7 @@ def list_all_webhooks(request: https_fn.CallableRequest) -> dict:
 
     query = db().collection("webhooks")
     if subscriber_id:
-        query = query.where("subscriberId", "==", subscriber_id)
+        query = query.where(filter=FieldFilter("subscriberId", "==", subscriber_id))
 
     webhooks = []
     for doc in query.stream():

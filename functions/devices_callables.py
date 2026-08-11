@@ -14,7 +14,7 @@ from common import db, require_admin
 ALLOWED_EMAILS_SECRET = ["ALLOWED_EMAILS"]
 
 
-@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET)
+@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET, invoker="public")
 def update_device_rules(request: https_fn.CallableRequest) -> dict:
     require_admin(request)
     data = request.data or {}
@@ -28,7 +28,7 @@ def update_device_rules(request: https_fn.CallableRequest) -> dict:
     return {"ok": True}
 
 
-@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET)
+@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET, invoker="public")
 def list_device_rules(request: https_fn.CallableRequest) -> dict:
     require_admin(request)
     data = request.data or {}
@@ -41,7 +41,7 @@ def list_device_rules(request: https_fn.CallableRequest) -> dict:
     return {"rules": (doc.to_dict() or {}).get("rules", [])}
 
 
-@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET)
+@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET, invoker="public")
 def list_devices(request: https_fn.CallableRequest) -> dict:
     require_admin(request)
     devices = []
@@ -52,7 +52,7 @@ def list_devices(request: https_fn.CallableRequest) -> dict:
     return {"devices": devices}
 
 
-@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET)
+@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET, invoker="public")
 def report_device_status(request: https_fn.CallableRequest) -> dict:
     """Called by the phone itself (owner-authenticated, same Firebase Auth
     identity used for ingestNotification) to report its installed-app list

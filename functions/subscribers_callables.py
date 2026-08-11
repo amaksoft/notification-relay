@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from firebase_admin import firestore
 from firebase_functions import https_fn, scheduler_fn
 from firebase_functions.https_fn import FunctionsErrorCode, HttpsError
+from google.cloud.firestore_v1 import FieldFilter
 
 from common import db, generate_api_key, hash_api_key, require_admin
 
@@ -20,7 +21,7 @@ ALLOWED_EMAILS_SECRET = ["ALLOWED_EMAILS"]
 
 
 def _delete_subscriber_webhooks(subscriber_id: str) -> int:
-    docs = list(db().collection("webhooks").where("subscriberId", "==", subscriber_id).stream())
+    docs = list(db().collection("webhooks").where(filter=FieldFilter("subscriberId", "==", subscriber_id)).stream())
     batch = db().batch()
     for doc in docs:
         batch.delete(doc.reference)
@@ -32,7 +33,7 @@ def _delete_subscriber_webhooks(subscriber_id: str) -> int:
 def _delete_subscriber_logs(subscriber_id: str) -> None:
     for collection_name in ("delivery_log", "test_deliveries"):
         docs = list(
-            db().collection(collection_name).where("subscriberId", "==", subscriber_id).stream()
+            db().collection(collection_name).where(filter=FieldFilter("subscriberId", "==", subscriber_id)).stream()
         )
         batch = db().batch()
         for doc in docs:
@@ -41,7 +42,7 @@ def _delete_subscriber_logs(subscriber_id: str) -> None:
             batch.commit()
 
 
-@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET)
+@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET, invoker="public")
 def create_subscriber(request: https_fn.CallableRequest) -> dict:
     require_admin(request)
     data = request.data or {}
@@ -72,7 +73,7 @@ def create_subscriber(request: https_fn.CallableRequest) -> dict:
     return {"id": doc_ref.id, "apiKey": raw_key}
 
 
-@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET)
+@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET, invoker="public")
 def grant_subscriber_access(request: https_fn.CallableRequest) -> dict:
     require_admin(request)
     data = request.data or {}
@@ -100,7 +101,7 @@ def grant_subscriber_access(request: https_fn.CallableRequest) -> dict:
     return {"grants": grants}
 
 
-@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET)
+@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET, invoker="public")
 def revoke_subscriber_access(request: https_fn.CallableRequest) -> dict:
     require_admin(request)
     data = request.data or {}
@@ -122,7 +123,7 @@ def revoke_subscriber_access(request: https_fn.CallableRequest) -> dict:
     return {"grants": grants}
 
 
-@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET)
+@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET, invoker="public")
 def list_subscribers(request: https_fn.CallableRequest) -> dict:
     require_admin(request)
     subscribers = []
@@ -134,7 +135,7 @@ def list_subscribers(request: https_fn.CallableRequest) -> dict:
     return {"subscribers": subscribers}
 
 
-@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET)
+@https_fn.on_call(secrets=ALLOWED_EMAILS_SECRET, invoker="public")
 def disable_subscriber(request: https_fn.CallableRequest) -> dict:
     require_admin(request)
     data = request.data or {}
@@ -160,8 +161,8 @@ def purge_expired_subscribers(event: scheduler_fn.ScheduledEvent) -> None:
     expired = (
         db()
         .collection("subscribers")
-        .where("enabled", "==", True)
-        .where("expiresAt", "<=", now)
+        .where(filter=FieldFilter("enabled", "==", True))
+        .where(filter=FieldFilter("expiresAt", "<=", now))
         .stream()
     )
     for doc in expired:

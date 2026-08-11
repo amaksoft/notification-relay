@@ -61,8 +61,13 @@ class TestRoute:
     def test_test_action_path(self):
         assert _route(FakeRequest("/api/webhooks/abc123/test")) == ("abc123", "test")
 
-    def test_non_webhooks_path(self):
-        assert _route(FakeRequest("/api/something-else")) == (None, None)
+    def test_raw_function_url_no_webhooks_segment(self):
+        # Hitting the function directly (not via the Hosting /api/webhooks
+        # rewrite) never has a literal "webhooks" path segment at all —
+        # routing must still work identically in that case.
+        assert _route(FakeRequest("/")) == (None, None)
+        assert _route(FakeRequest("/abc123")) == ("abc123", None)
+        assert _route(FakeRequest("/abc123/test")) == ("abc123", "test")
 
 
 class TestValidateFilter:

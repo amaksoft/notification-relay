@@ -89,7 +89,7 @@ def _log_delivery(webhook_id: str, subscriber_id: str, notification: dict, match
     )
 
 
-@https_fn.on_call(secrets=["ALLOWED_EMAILS"])
+@https_fn.on_call(secrets=["ALLOWED_EMAILS"], invoker="public")
 def ingest_notification(request: https_fn.CallableRequest) -> dict:
     require_admin(request)
     notification = _validate_notification(request.data or {})

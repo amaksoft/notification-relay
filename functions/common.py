@@ -11,9 +11,13 @@ import os
 import secrets
 from urllib.parse import urlparse
 
+import firebase_admin
 from firebase_admin import firestore
+from google.cloud.firestore_v1 import FieldFilter
 from firebase_functions import https_fn
 from firebase_functions.https_fn import FunctionsErrorCode, HttpsError
+
+firebase_admin.initialize_app()
 
 _db = None
 
@@ -69,8 +73,8 @@ def require_api_key(req: https_fn.Request) -> dict:
     query = (
         db()
         .collection("subscribers")
-        .where("apiKeyHash", "==", key_hash)
-        .where("enabled", "==", True)
+        .where(filter=FieldFilter("apiKeyHash", "==", key_hash))
+        .where(filter=FieldFilter("enabled", "==", True))
         .limit(1)
         .stream()
     )
@@ -113,8 +117,10 @@ def validate_webhook_url(url: str) -> str | None:
 
 
 def json_response(data: dict, status: int = 200) -> https_fn.Response:
+    # default=str: Firestore timestamps (createdAt/expiresAt, read back as
+    # DatetimeWithNanoseconds) aren't natively JSON-serializable.
     return https_fn.Response(
-        json.dumps(data),
+        json.dumps(data, default=str),
         status=status,
         headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
     )

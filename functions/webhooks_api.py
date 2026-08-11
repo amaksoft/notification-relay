@@ -13,6 +13,7 @@ Auth — there's no Callable SDK identity to hang this off of.
 
 from firebase_admin import firestore
 from firebase_functions import https_fn
+from google.cloud.firestore_v1 import FieldFilter
 
 from common import cors_preflight, db, json_response, require_api_key, validate_webhook_url
 
@@ -20,14 +21,18 @@ MAX_WEBHOOKS_PER_SUBSCRIBER = 20
 
 
 def _route(req: https_fn.Request) -> tuple[str | None, str | None]:
+    """Path is `/{id}/{action}` off of wherever this function is mounted.
+    Strip a leading "webhooks" segment if present (that's what the
+    Hosting rewrite in firebase.json forwards, e.g. `/api/webhooks/{id}`
+    arrives here as-is) but don't require it — hitting the raw Cloud
+    Function URL directly (no "webhooks" segment at all, just `/{id}`)
+    must route identically, since that's also a valid, useful way to
+    reach this function (e.g. during development)."""
     segments = [s for s in req.path.split("/") if s]
-    try:
-        idx = segments.index("webhooks")
-    except ValueError:
-        return None, None
-    rest = segments[idx + 1:]
-    webhook_id = rest[0] if len(rest) >= 1 else None
-    action = rest[1] if len(rest) >= 2 else None
+    if "webhooks" in segments:
+        segments = segments[segments.index("webhooks") + 1:]
+    webhook_id = segments[0] if len(segments) >= 1 else None
+    action = segments[1] if len(segments) >= 2 else None
     return webhook_id, action
 
 
@@ -52,7 +57,7 @@ def _own_webhook_or_none(webhook_id: str, subscriber_id: str):
 
 def _list_webhooks(subscriber_id: str) -> https_fn.Response:
     webhooks = []
-    for doc in db().collection("webhooks").where("subscriberId", "==", subscriber_id).stream():
+    for doc in db().collection("webhooks").where(filter=FieldFilter("subscriberId", "==", subscriber_id)).stream():
         entry = doc.to_dict() or {}
         entry["id"] = doc.id
         webhooks.append(entry)
@@ -61,7 +66,7 @@ def _list_webhooks(subscriber_id: str) -> https_fn.Response:
 
 def _create_webhook(req: https_fn.Request, subscriber_id: str) -> https_fn.Response:
     existing_count = len(
-        list(db().collection("webhooks").where("subscriberId", "==", subscriber_id).stream())
+        list(db().collection("webhooks").where(filter=FieldFilter("subscriberId", "==", subscriber_id)).stream())
     )
     if existing_count >= MAX_WEBHOOKS_PER_SUBSCRIBER:
         return json_response({"error": f"Webhook limit ({MAX_WEBHOOKS_PER_SUBSCRIBER}) reached."}, 400)
@@ -151,7 +156,7 @@ def _test_webhook(subscriber_id: str, webhook_id: str) -> https_fn.Response:
         return json_response({"ok": False, "error": str(exc)}, 502)
 
 
-@https_fn.on_request()
+@https_fn.on_request(invoker="public")
 def webhooks_api(req: https_fn.Request) -> https_fn.Response:
     if req.method == "OPTIONS":
         return cors_preflight()
