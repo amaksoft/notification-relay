@@ -33,6 +33,7 @@ object ConditionEvaluator {
             "NOTIFICATION_TEXT" -> contains(notification.optString("text"), condition.optString("stringValue"))
             "NOTIFICATION_PACKAGE_NAME" -> notification.optString("package") == condition.optString("stringValue")
             "NOTIFICATION_CHANNEL_ID" -> notification.optString("channelId") == condition.optString("stringValue")
+            "NOTIFICATION_DEVICE_ID" -> notification.optString("deviceId") == condition.optString("stringValue")
             "NOTIFICATION_FLAG_SET" -> {
                 val flags = notification.optInt("flags", 0)
                 val mask = condition.optInt("intValue", 0)

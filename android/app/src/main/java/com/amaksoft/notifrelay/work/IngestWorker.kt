@@ -31,6 +31,7 @@ class IngestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             "importance" to inputData.getInt(KEY_IMPORTANCE, 0),
             "timestamp" to inputData.getLong(KEY_TIMESTAMP, 0L),
             "key" to inputData.getString(KEY_NOTIF_KEY),
+            "deviceId" to inputData.getString(KEY_DEVICE_ID),
         )
         val payload = hashMapOf<String, Any?>("notification" to notification)
 
@@ -65,6 +66,7 @@ class IngestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         const val KEY_IMPORTANCE = "importance"
         const val KEY_TIMESTAMP = "timestamp"
         const val KEY_NOTIF_KEY = "notifKey"
+        const val KEY_DEVICE_ID = "deviceId"
 
         fun buildInputData(
             packageName: String,
@@ -77,6 +79,7 @@ class IngestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             importance: Int,
             timestamp: Long,
             notifKey: String,
+            deviceId: String,
         ): Data = Data.Builder()
             .putString(KEY_PACKAGE, packageName)
             .putString(KEY_APP_NAME, appName)
@@ -88,6 +91,7 @@ class IngestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             .putInt(KEY_IMPORTANCE, importance)
             .putLong(KEY_TIMESTAMP, timestamp)
             .putString(KEY_NOTIF_KEY, notifKey)
+            .putString(KEY_DEVICE_ID, deviceId)
             .build()
     }
 }

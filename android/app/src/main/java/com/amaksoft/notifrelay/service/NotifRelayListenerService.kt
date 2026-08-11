@@ -9,6 +9,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.Constraints
 import androidx.work.BackoffPolicy
+import com.amaksoft.notifrelay.DeviceId
 import com.amaksoft.notifrelay.data.AppDatabase
 import com.amaksoft.notifrelay.data.SeenChannelEntity
 import com.amaksoft.notifrelay.rules.ConditionEvaluator
@@ -93,6 +94,7 @@ class NotifRelayListenerService : NotificationListenerService() {
             put("channelName", channelName)
             put("flags", flags)
             put("importance", importance)
+            put("deviceId", DeviceId.get(applicationContext))
         }
 
         val now = System.currentTimeMillis()
@@ -123,6 +125,7 @@ class NotifRelayListenerService : NotificationListenerService() {
             importance = notification.getInt("importance"),
             timestamp = sbn.postTime,
             notifKey = sbn.key,
+            deviceId = notification.getString("deviceId"),
         )
         val request = OneTimeWorkRequestBuilder<IngestWorker>()
             .setInputData(inputData)
