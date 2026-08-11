@@ -1,0 +1,10 @@
+<resources>
+    <!-- Actual theming happens via Compose's MaterialTheme
+         (ui/theme/Theme.kt) — this is only the pre-Compose window
+         background shown before the first frame draws, so it deliberately
+         stays framework-only (no AndroidX Material library dependency). -->
+    <style name="Theme.NotifRelay" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:colorPrimary">@color/notifrelay_primary</item>
+        <item name="android:windowBackground">@color/notifrelay_primary</item>
+    </style>
+</resources>

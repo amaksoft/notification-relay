@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Reliability permissions, confirmed by decompiling the reference
+         app (net.tative.notificationsrelay) as ones it actually relies on
+         for a background NotificationListenerService to keep running
+         under aggressive OEM battery managers:
+         - RECEIVE_BOOT_COMPLETED + BootReceiver: nudge the app process to
+           start at boot rather than waiting for the system to eventually
+           get around to rebinding the listener.
+         - REQUEST_IGNORE_BATTERY_OPTIMIZATIONS + WAKE_LOCK: let the user
+           exempt the app from Doze/App Standby, which otherwise can delay
+           or drop notification delivery on many OEM skins. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <application
+        android:name=".App"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.NotifRelay">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".RulesActivity"
+            android:exported="false"
+            android:label="@string/rules_activity_title" />
+
+        <service
+            android:name=".service.NotifRelayListenerService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Local adb configuration surface — see docs/RULE_SCHEMA.md and
+             cli/notifrelay_cli/local_backend.py for the exact query/call
+             contract this must honor. Exported with no extra permission:
+             adb access already implies USB debugging is enabled, which is
+             already a significant trust boundary (see plan). -->
+        <provider
+            android:name=".provider.NotifRelayContentProvider"
+            android:authorities="com.amaksoft.notifrelay.provider"
+            android:exported="true" />
+
+    </application>
+</manifest>

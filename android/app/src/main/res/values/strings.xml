@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Notification Relay</string>
+    <string name="rules_activity_title">Forwarding rules</string>
+
+    <string name="sign_in_button">Sign in with Google</string>
+    <string name="signed_in_as">Signed in as %1$s</string>
+    <string name="listener_permission_missing">Notification access is not granted</string>
+    <string name="listener_permission_granted">Notification access is granted</string>
+    <string name="grant_listener_permission">Grant notification access</string>
+    <string name="open_rules">Manage rules</string>
+
+    <string name="no_rules">No rules yet. Notifications are only forwarded for apps/channels you add a rule for.</string>
+</resources>

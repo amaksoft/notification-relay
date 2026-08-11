@@ -1,0 +1,5 @@
+<resources>
+    <color name="notifrelay_primary">#3F51B5</color>
+    <color name="notifrelay_primary_dark">#303F9F</color>
+    <color name="notifrelay_accent">#FF4081</color>
+</resources>
