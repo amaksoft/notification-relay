@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Runtime (dangerous) permission on API 33+ — there's no Activity
+         here to run the normal request-permission flow, so this must be
+         granted via adb as a one-time setup step (see docs/OPERATIONS.md):
+         adb shell pm grant com.amaksoft.notifrelay.testapp android.permission.POST_NOTIFICATIONS -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:name=".TestApp"
+        android:allowBackup="false"
+        android:label="@string/app_name">
+
+        <!-- Scriptable notification source for the e2e verification
+             harness — see plan "End-to-end verification harness" and
+             cli/notifrelay_cli/testapp_backend.py, which this must match
+             exactly. No launcher Activity: this app is driven entirely
+             via adb/the CLI, never opened by hand. -->
+        <provider
+            android:name=".NotifTestContentProvider"
+            android:authorities="com.amaksoft.notifrelay.testapp.provider"
+            android:exported="true" />
+
+    </application>
+</manifest>
