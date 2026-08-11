@@ -1,6 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Package-visibility (Android 11+): without this, PackageManager
+         queries only ever return system/force-queryable packages, not
+         arbitrary third-party apps — the whole point of this app is to
+         enumerate and pick from installed apps for rule-building, so it
+         needs to see everything with a launcher entry. This is the
+         Play-Store-sanctioned way to do that (matches the existing
+         getLaunchIntentForPackage-based filtering in InstalledApps.kt)
+         rather than requesting the heavily-restricted, special-approval
+         QUERY_ALL_PACKAGES permission. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
