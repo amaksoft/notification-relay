@@ -24,10 +24,10 @@ class RulesActivity : ComponentActivity() {
                     rules = rules,
                     installedApps = viewModel.installedApps,
                     seenChannels = seenChannels,
-                    onPackageSelected = viewModel::loadChannelsFor,
                     onToggle = viewModel::toggleRule,
                     onDelete = viewModel::deleteRule,
                     onAddRule = viewModel::addRule,
+                    onUpdateRule = viewModel::updateRule,
                 )
             }
         }

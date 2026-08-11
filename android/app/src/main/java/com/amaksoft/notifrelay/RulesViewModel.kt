@@ -8,12 +8,10 @@ import com.amaksoft.notifrelay.data.AppDatabase
 import com.amaksoft.notifrelay.data.RuleEntity
 import com.amaksoft.notifrelay.data.SeenChannelEntity
 import com.google.firebase.functions.FirebaseFunctions
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
@@ -28,16 +26,13 @@ class RulesViewModel(application: Application) : AndroidViewModel(application) {
     val rules: StateFlow<List<RuleEntity>> = db.ruleDao().observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    // Full list, not scoped to a single package: the tree editor's
+    // channel leaf isn't necessarily tied to a sibling package leaf, so
+    // the picker needs to search across everything actually observed.
+    val seenChannels: StateFlow<List<SeenChannelEntity>> = db.seenChannelDao().observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     val installedApps: List<AppInfo> = InstalledApps.list(application)
-
-    private val _seenChannels = MutableStateFlow<List<SeenChannelEntity>>(emptyList())
-    val seenChannels: StateFlow<List<SeenChannelEntity>> = _seenChannels
-
-    fun loadChannelsFor(packageName: String) {
-        viewModelScope.launch {
-            _seenChannels.value = db.seenChannelDao().getForPackage(packageName)
-        }
-    }
 
     fun toggleRule(rule: RuleEntity, enabled: Boolean) = viewModelScope.launch {
         db.ruleDao().setEnabled(rule.id, enabled)
@@ -49,27 +44,23 @@ class RulesViewModel(application: Application) : AndroidViewModel(application) {
         syncToBackend()
     }
 
-    fun addRule(name: String, packageName: String, channelId: String?) = viewModelScope.launch {
-        val condition = buildSimpleCondition(packageName, channelId)
+    fun addRule(name: String, condition: JSONObject, throttleSeconds: Int) = viewModelScope.launch {
         val rule = RuleEntity(
             id = UUID.randomUUID().toString().take(12),
             name = name,
             conditionJson = condition.toString(),
+            throttleSeconds = throttleSeconds,
         )
         db.ruleDao().upsert(rule)
         syncToBackend()
     }
 
-    /** Mirrors cli/notifrelay_cli/conditions.py build_simple_condition for
-     * the common package(+channel) case. */
-    private fun buildSimpleCondition(pkg: String, channel: String?): JSONObject {
-        val packageLeaf = JSONObject().put("type", "NOTIFICATION_PACKAGE_NAME").put("stringValue", pkg)
-        if (channel.isNullOrBlank()) return packageLeaf
-        val channelLeaf = JSONObject().put("type", "NOTIFICATION_CHANNEL_ID").put("stringValue", channel)
-        return JSONObject().put("type", "AND").put(
-            "conditions",
-            JSONArray().put(packageLeaf).put(channelLeaf)
+    fun updateRule(id: String, name: String, condition: JSONObject, throttleSeconds: Int) = viewModelScope.launch {
+        val existing = db.ruleDao().getById(id) ?: return@launch
+        db.ruleDao().update(
+            existing.copy(name = name, conditionJson = condition.toString(), throttleSeconds = throttleSeconds)
         )
+        syncToBackend()
     }
 
     private suspend fun syncToBackend() {
