@@ -97,25 +97,33 @@ def _subscriber_ref(subscriber_id: str):
     return ref
 
 
-def grant_access(subscriber_id: str, package: str, channel_ids: list[str] | None = None) -> dict:
+def grant_access(subscriber_id: str, grants_to_add: list[dict]) -> dict:
+    """grants_to_add: [{package, channelIds?, deviceIds?}], one or more at
+    once (see plan divergence — batch, not one-package-per-call). Each
+    entry replaces any existing grant for the same package."""
     ref = _subscriber_ref(subscriber_id)
     subscriber = ref.get().to_dict() or {}
     grants = subscriber.get("grants") or {"grants": []}
-    grant_list = [g for g in grants.get("grants", []) if g.get("package") != package]
-    new_grant = {"package": package}
-    if channel_ids:
-        new_grant["channelIds"] = channel_ids
-    grant_list.append(new_grant)
+    grant_list = grants.get("grants", [])
+    incoming_packages = {g["package"] for g in grants_to_add}
+    grant_list = [g for g in grant_list if g.get("package") not in incoming_packages]
+    for entry in grants_to_add:
+        merged = {"package": entry["package"]}
+        if entry.get("channelIds"):
+            merged["channelIds"] = entry["channelIds"]
+        if entry.get("deviceIds"):
+            merged["deviceIds"] = entry["deviceIds"]
+        grant_list.append(merged)
     grants["grants"] = grant_list
     ref.update({"grants": grants})
     return grants
 
 
-def revoke_access(subscriber_id: str, package: str) -> dict:
+def revoke_access(subscriber_id: str, packages: list[str]) -> dict:
     ref = _subscriber_ref(subscriber_id)
     subscriber = ref.get().to_dict() or {}
     grants = subscriber.get("grants") or {"grants": []}
-    grants["grants"] = [g for g in grants.get("grants", []) if g.get("package") != package]
+    grants["grants"] = [g for g in grants.get("grants", []) if g.get("package") not in packages]
     ref.update({"grants": grants})
     return grants
 
@@ -140,6 +148,67 @@ def disable_subscriber(subscriber_id: str) -> int:
     if docs:
         batch.commit()
     return len(docs)
+
+
+def delete_subscriber(subscriber_id: str) -> int:
+    """Hard delete: the subscriber doc itself, not just its webhooks — see
+    disable_subscriber for the reversible, soft version. No reason to keep
+    e.g. a short-lived e2e-test subscriber's record around forever."""
+    ref = _subscriber_ref(subscriber_id)
+    webhook_docs = list(db().collection("webhooks").where(filter=FieldFilter("subscriberId", "==", subscriber_id)).stream())
+    batch = db().batch()
+    for doc in webhook_docs:
+        batch.delete(doc.reference)
+    if webhook_docs:
+        batch.commit()
+    for collection_name in ("delivery_log", "test_deliveries", "access_requests", "webhook_queue"):
+        log_docs = list(
+            db().collection(collection_name).where(filter=FieldFilter("subscriberId", "==", subscriber_id)).stream()
+        )
+        batch = db().batch()
+        for doc in log_docs:
+            batch.delete(doc.reference)
+        if log_docs:
+            batch.commit()
+    ref.delete()
+    return len(webhook_docs)
+
+
+# --- Access requests (owner review side) --------------------------------
+
+def list_access_requests(status: str | None = "pending") -> list[dict]:
+    query = db().collection("access_requests")
+    if status:
+        query = query.where(filter=FieldFilter("status", "==", status))
+    entries = []
+    for doc in query.stream():
+        entry = doc.to_dict() or {}
+        entry["id"] = doc.id
+        entries.append(entry)
+    return entries
+
+
+def _access_request_ref(request_id: str):
+    ref = db().collection("access_requests").document(request_id)
+    doc = ref.get()
+    if not doc.exists:
+        raise SystemExit(f"No access request with id {request_id!r}.")
+    data = doc.to_dict() or {}
+    if data.get("status") != "pending":
+        raise SystemExit(f"Request {request_id!r} is already {data.get('status')!r}.")
+    return ref, data
+
+
+def approve_access_request(request_id: str) -> dict:
+    ref, access_request = _access_request_ref(request_id)
+    grants = grant_access(access_request["subscriberId"], access_request["grants"])
+    ref.update({"status": "approved", "resolvedAt": firestore.SERVER_TIMESTAMP})
+    return grants
+
+
+def deny_access_request(request_id: str) -> None:
+    ref, _ = _access_request_ref(request_id)
+    ref.update({"status": "denied", "resolvedAt": firestore.SERVER_TIMESTAMP})
 
 
 # --- Webhooks (read-only oversight) -------------------------------------

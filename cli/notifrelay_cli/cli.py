@@ -9,7 +9,7 @@ import json
 import re
 import sys
 
-from . import backend, conditions, remote_backend
+from . import backend, conditions, remote_backend, testapp_backend
 from .config import set_default_device_id
 
 
@@ -86,25 +86,40 @@ def cmd_device_rule_remove(args) -> None:
 
 
 def _parse_grant(spec: str) -> dict:
-    package, _, channel = spec.partition(":")
+    """package[:channel1,channel2][@device1,device2] — whole package if
+    both are omitted. Repeatable (--grant, one flag per package); multiple
+    specs for the same package are merged by the caller."""
+    package, _, rest = spec.partition(":")
+    channels_part, _, devices_part = rest.partition("@")
+    if "@" in package:  # package@device1,device2, no channels at all
+        package, _, devices_part = package.partition("@")
     grant = {"package": package}
-    if channel:
-        grant["channelIds"] = [channel]
+    if channels_part:
+        grant["channelIds"] = [c for c in channels_part.split(",") if c]
+    if devices_part:
+        grant["deviceIds"] = [d for d in devices_part.split(",") if d]
     return grant
+
+
+def _merge_grant_specs(specs: list[str]) -> list[dict]:
+    merged: dict[str, dict] = {}
+    for spec in specs or []:
+        grant = _parse_grant(spec)
+        existing = merged.setdefault(grant["package"], {"package": grant["package"]})
+        if "channelIds" in grant:
+            existing.setdefault("channelIds", [])
+            existing["channelIds"].extend(grant["channelIds"])
+        if "deviceIds" in grant:
+            existing.setdefault("deviceIds", [])
+            existing["deviceIds"].extend(grant["deviceIds"])
+    return list(merged.values())
 
 
 def cmd_subscriber_create(args) -> None:
     if args.allow_all:
         grants = {"allowAll": True}
     else:
-        merged: dict[str, dict] = {}
-        for spec in args.grant or []:
-            grant = _parse_grant(spec)
-            existing = merged.setdefault(grant["package"], {"package": grant["package"]})
-            if "channelIds" in grant:
-                existing.setdefault("channelIds", [])
-                existing["channelIds"].extend(grant["channelIds"])
-        grants = {"grants": list(merged.values())}
+        grants = {"grants": _merge_grant_specs(args.grant)}
     ttl_seconds = parse_duration(args.ttl) if args.ttl else None
     subscriber_id, api_key = remote_backend.create_subscriber(args.name, grants, ttl_seconds)
     print(f"Subscriber id: {subscriber_id}")
@@ -112,8 +127,7 @@ def cmd_subscriber_create(args) -> None:
 
 
 def cmd_subscriber_grant(args) -> None:
-    channel_ids = [args.channel] if args.channel else None
-    grants = remote_backend.grant_access(args.subscriber_id, args.package, channel_ids)
+    grants = remote_backend.grant_access(args.subscriber_id, _merge_grant_specs(args.grant))
     _print_json(grants)
 
 
@@ -131,8 +145,32 @@ def cmd_subscriber_disable(args) -> None:
     print(f"Disabled. Deleted {deleted} webhook(s).")
 
 
+def cmd_subscriber_delete(args) -> None:
+    deleted = remote_backend.delete_subscriber(args.subscriber_id)
+    print(f"Deleted. Removed {deleted} webhook(s) and all logs/requests for this subscriber.")
+
+
+def cmd_subscriber_requests_list(args) -> None:
+    _print_json(remote_backend.list_access_requests(args.status))
+
+
+def cmd_subscriber_requests_approve(args) -> None:
+    grants = remote_backend.approve_access_request(args.request_id)
+    _print_json(grants)
+
+
+def cmd_subscriber_requests_deny(args) -> None:
+    remote_backend.deny_access_request(args.request_id)
+    print("Denied.")
+
+
 def cmd_webhook_list(args) -> None:
     _print_json(remote_backend.list_webhooks(args.subscriber_id))
+
+
+def cmd_test_post_notification(args) -> None:
+    testapp_backend.post_notification(args.title, args.text, args.channel)
+    print("Posted.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -192,22 +230,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     subscriber = subparsers.add_parser("subscriber").add_subparsers(dest="subscriber_command", required=True)
 
+    _GRANT_HELP = (
+        "package[:channel1,channel2][@device1,device2] — whole package/any channel/any device if "
+        "omitted, repeatable (one flag per package; multiple specs for the same package merge)"
+    )
+
     p = subscriber.add_parser("create")
     p.add_argument("--name", required=True)
-    p.add_argument("--grant", action="append", help="package or package:channelId, repeatable")
+    p.add_argument("--grant", action="append", help=_GRANT_HELP)
     p.add_argument("--allow-all", action="store_true")
     p.add_argument("--ttl", help="e.g. 30m, 1h, 2d")
     p.set_defaults(func=cmd_subscriber_create)
 
     p = subscriber.add_parser("grant")
     p.add_argument("subscriber_id")
-    p.add_argument("--package", required=True)
-    p.add_argument("--channel")
+    p.add_argument("--grant", action="append", required=True, help=_GRANT_HELP)
     p.set_defaults(func=cmd_subscriber_grant)
 
     p = subscriber.add_parser("revoke")
     p.add_argument("subscriber_id")
-    p.add_argument("--package", required=True)
+    p.add_argument("--package", action="append", required=True, help="repeatable — revoke multiple packages at once")
     p.set_defaults(func=cmd_subscriber_revoke)
 
     p = subscriber.add_parser("list")
@@ -217,10 +259,35 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("subscriber_id")
     p.set_defaults(func=cmd_subscriber_disable)
 
+    p = subscriber.add_parser("delete", help="Hard delete — removes the subscriber doc itself, not just its webhooks.")
+    p.add_argument("subscriber_id")
+    p.set_defaults(func=cmd_subscriber_delete)
+
+    requests_ = subscriber.add_parser("requests").add_subparsers(dest="requests_command", required=True)
+
+    p = requests_.add_parser("list")
+    p.add_argument("--status", default="pending", help="pending (default) | approved | denied | (empty for all)")
+    p.set_defaults(func=cmd_subscriber_requests_list)
+
+    p = requests_.add_parser("approve")
+    p.add_argument("request_id")
+    p.set_defaults(func=cmd_subscriber_requests_approve)
+
+    p = requests_.add_parser("deny")
+    p.add_argument("request_id")
+    p.set_defaults(func=cmd_subscriber_requests_deny)
+
     webhook = subparsers.add_parser("webhook").add_subparsers(dest="webhook_command", required=True)
     p = webhook.add_parser("list")
     p.add_argument("--subscriber-id", dest="subscriber_id")
     p.set_defaults(func=cmd_webhook_list)
+
+    test = subparsers.add_parser("test").add_subparsers(dest="test_command", required=True)
+    p = test.add_parser("post-notification", help="Post a real, controllable notification via the e2e test app (android/testapp/).")
+    p.add_argument("--title", required=True)
+    p.add_argument("--text", default="")
+    p.add_argument("--channel", default="test_channel_a")
+    p.set_defaults(func=cmd_test_post_notification)
 
     return parser
 
