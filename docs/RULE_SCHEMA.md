@@ -36,6 +36,7 @@ so the two implementations can't silently drift apart.
 | `NOTIFICATION_PACKAGE_NAME` | notification package | exact string equality with `stringValue` |
 | `NOTIFICATION_FLAG_SET` | notification flags (int bitmask) | `(flags & intValue) != 0` |
 | `NOTIFICATION_CHANNEL_ID` | notification channel id | exact string equality with `stringValue` — **added in this project, not present in the reference app**. Since channel ids are only unique within a package's namespace, pair this with a `NOTIFICATION_PACKAGE_NAME` condition (via `AND`) in practice; nothing technically enforces that pairing since it's just another leaf in the tree. |
+| `NOTIFICATION_DEVICE_ID` | notification source device id | exact string equality with `stringValue`, against the same id used as the `devices/{deviceId}` document id — **added in this project**. Lets a webhook subscriber (or an on-device rule, though that's a no-op there since a device only ever sees its own notifications) filter by *which physical device* something was forwarded from, e.g. to separate "work phone" from "personal phone" streams within a single webhook's own Condition tree. This is the self-service half of device scoping — the owner-side half is the `deviceIds` dimension on a subscriber's `grants` (see Grant scope below); a subscriber must already be grant-scoped to a device before this leaf can ever see notifications from it. |
 
 `inverse: true` negates whatever the node would otherwise evaluate to — apply it *after* computing
 the node's own result (i.e. `NOT(AND(...))`/`NOT(OR(...))` are valid and behave as De Morgan would
@@ -92,6 +93,7 @@ per-webhook filters (`webhooks/{id}.filter`):
   "channelId": "slack_dm_channel",
   "channelName": "Direct messages",
   "key": "0|com.slack|...",
+  "deviceId": "a1b2c3d4-...",  // the sending device's devices/{deviceId} id — added in this project
   "propertiesJson": "{}"     // raw extras blob, carried through but not currently used in matching
 }
 ```
@@ -118,17 +120,28 @@ per-webhook filters (`webhooks/{id}.filter`):
 
 ## Grant scope (subscribers) — a separate, simpler shape
 
-Not part of the Condition tree. A subscriber's `grants` restrict which `(package, channelId)`
-combinations their webhooks can ever see, enforced as a runtime pre-filter *before* their own
-Condition is evaluated (see main plan for rationale — this is deliberately not structural validation
-of the submitted Condition tree):
+Not part of the Condition tree. A subscriber's `grants` restrict which `(package, channelId,
+deviceId)` combinations their webhooks can ever see, enforced as a runtime pre-filter *before* their
+own Condition is evaluated (see main plan for rationale — this is deliberately not structural
+validation of the submitted Condition tree):
 
 ```jsonc
 {
   "grants": [
-    { "package": "com.slack" },                                   // whole package, any channel
-    { "package": "com.whatsapp", "channelIds": ["calls_channel"] } // one specific channel only
+    { "package": "com.slack" },                                   // whole package, any channel/device
+    { "package": "com.whatsapp", "channelIds": ["calls_channel"] }, // one specific channel, any device
+    { "package": "com.whatsapp", "deviceIds": ["pixel-8"] },        // any channel, one specific device
+    { "package": "com.whatsapp", "channelIds": ["calls_channel"], "deviceIds": ["pixel-8"] } // both
   ]
   // OR: { "allowAll": true }
 }
 ```
+
+Each grant entry is per-package; `channelIds`/`deviceIds` are independent dimensions, both optional
+— omitting either means "no restriction on that dimension." A notification matches a grant entry iff
+the package matches AND (channelIds is absent/empty OR the notification's channelId is in it) AND
+(deviceIds is absent/empty OR the notification's deviceId is in it). This is the *owner-controlled*
+half of device scoping — the subscriber's own webhook Condition can additionally self-filter by
+device via `NOTIFICATION_DEVICE_ID` (see Condition types above), but only ever within whatever a
+grant already allows; a subscriber can never see a device the owner hasn't granted them, regardless
+of what their own Condition tree says (same pre-filter-then-Condition ordering as package/channel).
